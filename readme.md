@@ -1,3 +1,5 @@
+`working on StyleGan` 
+
 # Conditional Style-Based Logo Generation with Generative Adversarial Networks
 
 The paper of this project is [available here](https://arxiv.org/abs/1909.09974), a poster version will appear at ICMLA 2019.

@@ -30,14 +30,8 @@ class Resize(object):
   def __init__(self,size):
     self.size = size if isinstance(size,tuple) else tuple(size)
   def __call__(self,x):
-    h0,w0,_ = x.shape
-    r = min([self.size[1]/w0,self.size[0]/h0])
-    x = cv2.resize(x,(int(w0*r),int(h0*r)))
-    temp = np.full((self.size[0],self.size[1],3),0,dtype=x.dtype)
-    px = int(self.size[1]-x.shape[1])//2
-    py = int(self.size[0]-x.shape[0])//2
-    temp[py:py+x.shape[0],px:px+x.shape[1],:] = x
-    return temp 
+    x = cv2.resize(x,(self.size[1],self.size[0]))
+    return x 
 #----------------------------------------------------------------------------
 
 def error(msg):
@@ -325,8 +319,8 @@ def create_from_images(tfrecord_dir, image_dir, shuffle, add_condition):
     print('Loading images from "%s"' % image_dir)
 
     all_data = pd.read_csv(csv_path).to_numpy()
-    image_filenames = all_data[:10,0]
-    conditions_all = all_data[:10,1] #for others use Clusters
+    image_filenames = all_data[:,0]
+    conditions_all = all_data[:,1] #for others use Clusters
 
 
 
@@ -348,39 +342,27 @@ def create_from_images(tfrecord_dir, image_dir, shuffle, add_condition):
 
 
     drop = []
-    selected = []
-    for i in range(image_filenames.shape[0]):
-        img = np.asarray(PIL.Image.open(image_dir + image_filenames[i]))
-        img = resizer(img)
-        if channels == 1:
-            img = img[np.newaxis, :, :] # HW => CHW
-        else:
-            try:
-                img = img.transpose([2, 0, 1]) # HWC => CHW
-                selected.append(i)
-            except:
-                drop.append(i)
 
 
-  
 
     with TFRecordExporter(tfrecord_dir, image_filenames.shape[0]) as tfr:
    
         deleted = []
         new_selected = []
-        print('selected at stage 1: ',len(selected))
-        for i in range(len(selected)):
-            idx = selected[i]
+        print('selected at stage 1: ',image_filenames.shape[0])
+        for idx in range(image_filenames.shape[0]):
+    
     
             img = np.asarray(PIL.Image.open(image_dir + image_filenames[idx]))
             img = resizer(img)
             if channels == 1:
                 img = img[np.newaxis, :, :] # HW => CHW
             else:
-                img = img.transpose([2, 0, 1]) # HWC => CHW
+                
                 try:
+                    img = img.transpose([2, 0, 1]) # HWC => CHW
                     tfr.add_image(img)
-                    new_selected.append(i)
+                    new_selected.append(idx)
                 except Exception as e:
                     #os.remove(image_filenames[order[idx]])
     
@@ -398,8 +380,7 @@ def create_from_images(tfrecord_dir, image_dir, shuffle, add_condition):
             #labels = np.random.randint(0,np.max(conditions),len(image_filenames))
             onehot = np.zeros((len(new_selected), np.max(conditions) + 1), dtype=np.float32)
             for k in range(len(new_selected)):
-              i = new_selected[k]
-              idx = selected[i]
+              idx = new_selected[k]
               onehot[k][conditions[idx]] = 1.
             
 

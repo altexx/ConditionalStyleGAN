@@ -21,7 +21,23 @@ import PIL.Image
 import dnnlib.tflib as tflib
 import pickle
 from training import dataset
+import pandas as pd 
+import cv2 
+import matplotlib.pyplot as plt 
 
+
+class Resize(object):
+  def __init__(self,size):
+    self.size = size if isinstance(size,tuple) else tuple(size)
+  def __call__(self,x):
+    h0,w0,_ = x.shape
+    r = min([self.size[1]/w0,self.size[0]/h0])
+    x = cv2.resize(x,(int(w0*r),int(h0*r)))
+    temp = np.full((self.size[0],self.size[1],3),0,dtype=x.dtype)
+    px = int(self.size[1]-x.shape[1])//2
+    py = int(self.size[0]-x.shape[0])//2
+    temp[py:py+x.shape[0],px:px+x.shape[1],:] = x
+    return temp 
 #----------------------------------------------------------------------------
 
 def error(msg):
@@ -87,6 +103,7 @@ class TFRecordExporter:
                 'data': tf.train.Feature(bytes_list=tf.train.BytesList(value=[quant.tostring()]))}))
             tfr_writer.write(ex.SerializeToString())
         self.cur_images += 1
+
 
     def add_labels(self, labels):
         if self.print_progress:
@@ -198,6 +215,9 @@ def display(tfrecord_dir):
     dset = dataset.TFRecordDataset(tfrecord_dir, max_label_size='full', repeat=False, shuffle_mb=0)
     tflib.init_uninitialized_vars()
     import cv2  # pip install opencv-python
+    path = os.path.join(tfrecord_dir,'samples')
+    if not os.path.exists(path):
+      os.makedirs(path)
 
     idx = 0
     while True:
@@ -207,13 +227,14 @@ def display(tfrecord_dir):
             break
         if idx == 0:
             print('Displaying images')
-            cv2.namedWindow('dataset_tool')
+            
             print('Press SPACE or ENTER to advance, ESC to exit')
         print('\nidx = %-8d\nlabel = %s' % (idx, labels[0].tolist()))
-        cv2.imshow('dataset_tool', images[0].transpose(1, 2, 0)[:, :, ::-1]) # CHW => HWC, RGB => BGR
+        #plt.imshow( images[0].transpose(1, 2, 0)[:, :, ::-1]) # CHW => HWC, RGB => BGR
+        #plt.show()
+        cv2.imwrite(path+'/%d.jpg'%idx,images[0].transpose(1, 2, 0)[:, :, ::-1])
         idx += 1
-        if cv2.waitKey() == 27:
-            break
+        
     print('\nDisplayed %d images.' % idx)
 
 #----------------------------------------------------------------------------
@@ -294,22 +315,28 @@ def unpickle(file):
 
 
 def create_from_images(tfrecord_dir, image_dir, shuffle, add_condition):
+    tfrecord_dir = '/content/data'
+    if not os.path.exists(tfrecord_dir):
+      os.makedirs(tfrecord_dir)
+    csv_path = '/content/train.csv'
+    resizer = Resize((256,256))
     print("ADD CONDITION ", add_condition)
+    image_dir = '/content/train_images/'
     print('Loading images from "%s"' % image_dir)
 
-    all_data = unpickle('../data/mypickle.pickle')
-    image_filenames_temp = all_data["Filenames"]
-    conditions_all = all_data["Labels"] #for others use Clusters
-    assert len(conditions_all) == len(image_filenames_temp)
+    all_data = pd.read_csv(csv_path).to_numpy()
+    image_filenames = all_data[:10,0]
+    conditions_all = all_data[:10,1] #for others use Clusters
 
-    import pandas as pd
-    df = pd.DataFrame.from_dict(all_data)
+
+
     #image_filenames_temp = sorted(glob.glob(os.path.join(image_dir, '*.jpg')))
-    print("NUMBER OF FILES: ", len(image_filenames_temp))
-    if len(image_filenames_temp) == 0:
-        error('No input images found')
+    print("NUMBER OF FILES: ", len(image_filenames))
 
-    img = np.asarray(PIL.Image.open(image_dir + df['Filenames'][0]))
+
+    img = np.asarray(PIL.Image.open(image_dir + image_filenames[0]))
+    img = resizer(img)
+    
     resolution = img.shape[0]
     channels = img.shape[2] if img.ndim == 3 else 1
     if img.shape[1] != resolution:
@@ -321,57 +348,61 @@ def create_from_images(tfrecord_dir, image_dir, shuffle, add_condition):
 
 
     drop = []
-    df_copy = df.copy()
-    for i in range(len(df["Filenames"])):
-        img = np.asarray(PIL.Image.open(image_dir + df["Filenames"].iloc[i]))
+    selected = []
+    for i in range(image_filenames.shape[0]):
+        img = np.asarray(PIL.Image.open(image_dir + image_filenames[i]))
+        img = resizer(img)
         if channels == 1:
             img = img[np.newaxis, :, :] # HW => CHW
         else:
             try:
                 img = img.transpose([2, 0, 1]) # HWC => CHW
-
-                print("added")
+                selected.append(i)
             except:
                 drop.append(i)
-                print("deleted")
-                continue
 
-    print("NUMBER OF IMAGES BEFORE: ", len(df))
-    df = df.drop(drop)
-    print("NUMBER OF IMAGES AFTER: ", len(df))
 
-    with TFRecordExporter(tfrecord_dir, len(df)) as tfr:
-        order = np.arange(len(df))
-        drop = []
+  
+
+    with TFRecordExporter(tfrecord_dir, image_filenames.shape[0]) as tfr:
+   
         deleted = []
-        for idx in range(order.size):
-            print("HERE ",df["Filenames"].iloc[order[idx]])
-            img = np.asarray(PIL.Image.open(image_dir + df["Filenames"].iloc[order[idx]]))
+        new_selected = []
+        print('selected at stage 1: ',len(selected))
+        for i in range(len(selected)):
+            idx = selected[i]
+    
+            img = np.asarray(PIL.Image.open(image_dir + image_filenames[idx]))
+            img = resizer(img)
             if channels == 1:
                 img = img[np.newaxis, :, :] # HW => CHW
             else:
                 img = img.transpose([2, 0, 1]) # HWC => CHW
                 try:
                     tfr.add_image(img)
-                except:
+                    new_selected.append(i)
+                except Exception as e:
                     #os.remove(image_filenames[order[idx]])
-                    print("DELETED")
-                    drop.append(df.index[order[idx]])
-                    print("###########")
-                    deleted.append(df["Filenames"].iloc[order[idx]])
+    
+                    drop.append(idx)
+                    print(e)
+
                     continue
 
 
-        print("############# DELETED FILENAMES ############")
-        print(deleted)
-        df = df.drop(drop)
+        print('selected at stage 2: ',len(new_selected))
+
         if add_condition == 1:
             print("Adding Labels")
-            conditions = np.asarray(df["Labels"])
+            conditions = conditions_all
             #labels = np.random.randint(0,np.max(conditions),len(image_filenames))
-            onehot = np.zeros((conditions.size, np.max(conditions) + 1), dtype=np.float32)
-            onehot[np.arange(conditions.size), conditions] = 1.0
-            print(onehot)
+            onehot = np.zeros((len(new_selected), np.max(conditions) + 1), dtype=np.float32)
+            for k in range(len(new_selected)):
+              i = new_selected[k]
+              idx = selected[i]
+              onehot[k][conditions[idx]] = 1.
+            
+
             tfr.add_labels(onehot)
 
 
